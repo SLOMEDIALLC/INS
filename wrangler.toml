@@ -3,5 +3,5 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 
 kv_namespaces = [
-  { binding = "INSTAGRAM_ACCOUNTS", id = "YOUR_KV_NAMESPACE_ID" }
+  { binding = "INSTAGRAM_ACCOUNTS", id = "5087009cdd9d45479c5f94a40b8de426" }
 ]

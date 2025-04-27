@@ -1,5 +1,5 @@
 // KV 命名空间绑定名称
-const KV_NAMESPACE = 'INS_ACCOUNTS'
+const KV_NAMESPACE = 'INSTAGRAM_ACCOUNTS'
 const ADMIN_USERNAME = 'admin' // 在实际部署时更改
 const ADMIN_PASSWORD = 'admin123' // 在实际部署时更改
 
@@ -91,12 +91,14 @@ async function handleAdmin(request) {
                                 <tr>
                                     <th>用户名</th>
                                     <th>点击次数</th>
+                                    <th>最后使用时间</th>
                                     <th>操作</th>
                                 </tr>
                             </thead>
                             <tbody></tbody>
                         </table>
                     </div>
+                    <button onclick="resetStats()" class="btn btn-warning">重置统计</button>
                 </div>
             </div>
         </div>
@@ -106,7 +108,7 @@ async function handleAdmin(request) {
             async function loadAccounts() {
                 const response = await fetch('/api/accounts', {
                     headers: {
-                        'Authorization': 'Basic ' + btoa(\`${ADMIN_USERNAME}:${ADMIN_PASSWORD}\`)
+                        'Authorization': 'Basic ' + btoa('${ADMIN_USERNAME}:${ADMIN_PASSWORD}')
                     }
                 });
                 const accounts = await response.json();
@@ -117,7 +119,8 @@ async function handleAdmin(request) {
                     const tr = document.createElement('tr');
                     tr.innerHTML = \`
                         <td>\${account.username}</td>
-                        <td>\${account.clicks}</td>
+                        <td>\${account.clicks || 0}</td>
+                        <td>\${account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用'}</td>
                         <td>
                             <button onclick="deleteAccount('\${account.username}')" class="btn btn-sm btn-danger">删除</button>
                         </td>
@@ -135,7 +138,7 @@ async function handleAdmin(request) {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': 'Basic ' + btoa(\`${ADMIN_USERNAME}:${ADMIN_PASSWORD}\`)
+                        'Authorization': 'Basic ' + btoa('${ADMIN_USERNAME}:${ADMIN_PASSWORD}')
                     },
                     body: JSON.stringify({ username })
                 });
@@ -151,7 +154,21 @@ async function handleAdmin(request) {
                 await fetch(\`/api/accounts/\${username}\`, {
                     method: 'DELETE',
                     headers: {
-                        'Authorization': 'Basic ' + btoa(\`${ADMIN_USERNAME}:${ADMIN_PASSWORD}\`)
+                        'Authorization': 'Basic ' + btoa('${ADMIN_USERNAME}:${ADMIN_PASSWORD}')
+                    }
+                });
+                
+                loadAccounts();
+            }
+
+            // 重置统计
+            async function resetStats() {
+                if (!confirm('确定要重置所有统计数据吗？')) return;
+                
+                await fetch('/api/stats/reset', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Basic ' + btoa('${ADMIN_USERNAME}:${ADMIN_PASSWORD}')
                     }
                 });
                 
@@ -200,6 +217,18 @@ async function handleAPI(request) {
     }
   }
 
+  if (url.pathname === '/api/stats/reset') {
+    if (request.method === 'POST') {
+      const accounts = await listAccounts()
+      for (const account of accounts) {
+        account.clicks = 0
+        account.lastUsed = 0
+        await updateAccount(account)
+      }
+      return new Response('OK')
+    }
+  }
+
   return new Response('Not Found', { status: 404 })
 }
 
@@ -216,7 +245,7 @@ async function handleRedirect(request) {
   let selectedAccount = accounts[0]
 
   for (const account of accounts) {
-    if (account.lastUsed < minLastUsed) {
+    if (!account.lastUsed || account.lastUsed < minLastUsed) {
       minLastUsed = account.lastUsed
       selectedAccount = account
     }
@@ -232,16 +261,16 @@ async function handleRedirect(request) {
   await logAccess(selectedAccount.username, clientIP)
 
   // 重定向到 Instagram 应用
-  return Response.redirect(`instagram://user?username=${selectedAccount.username.replace('@', '')}`, 302);
+  return Response.redirect(`instagram://user?username=${selectedAccount.username}`, 302)
 }
 
 // KV 操作函数
 async function listAccounts() {
-  const list = await INSTAGRAM_ACCOUNTS.list()
+  const list = await KV_NAMESPACE.list()
   const accounts = []
   for (const key of list.keys) {
     if (key.name.startsWith('account:')) {
-      const account = await INSTAGRAM_ACCOUNTS.get(key.name, 'json')
+      const account = await KV_NAMESPACE.get(key.name, 'json')
       accounts.push(account)
     }
   }
@@ -254,19 +283,19 @@ async function addAccount(username) {
     clicks: 0,
     lastUsed: 0
   }
-  await INSTAGRAM_ACCOUNTS.put(`account:${username}`, JSON.stringify(account))
+  await KV_NAMESPACE.put(`account:${username}`, JSON.stringify(account))
 }
 
 async function updateAccount(account) {
-  await INSTAGRAM_ACCOUNTS.put(`account:${account.username}`, JSON.stringify(account))
+  await KV_NAMESPACE.put(`account:${account.username}`, JSON.stringify(account))
 }
 
 async function deleteAccount(username) {
-  await INSTAGRAM_ACCOUNTS.delete(`account:${username}`)
+  await KV_NAMESPACE.delete(`account:${username}`)
 }
 
 async function logAccess(username, ip) {
   const now = new Date().toISOString()
   const logKey = `log:${now}`
-  await INSTAGRAM_ACCOUNTS.put(logKey, JSON.stringify({ username, ip, timestamp: now }))
+  await KV_NAMESPACE.put(logKey, JSON.stringify({ username, ip, timestamp: now }))
 }
