@@ -173,6 +173,16 @@ const adminHtml = `
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Instagram 账号管理</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .btn-primary {
+      background-color: #0d6efd;
+      border-color: #0d6efd;
+    }
+    .btn-warning {
+      background-color: #ffc107;
+      border-color: #ffc107;
+    }
+  </style>
 </head>
 <body>
   <div class="container mt-5">
@@ -216,7 +226,8 @@ const adminHtml = `
             <thead>
               <tr>
                 <th>用户名</th>
-                <th>访问链接</th>
+                <th>短链接</th>
+                <th>自定义链接</th>
                 <th>点击次数</th>
                 <th>最后使用时间</th>
                 <th>操作</th>
@@ -271,6 +282,7 @@ const adminHtml = `
                 <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${shortCodeId}')">复制</button>
               </div>
             </td>
+            <td>\${account.shortCode}</td>
             <td>\${account.clicks || 0}</td>
             <td>\${lastUsedText}</td>
             <td>
@@ -379,11 +391,12 @@ const adminHtml = `
 
 // 处理管理界面
 async function handleAdmin(request) {
+  // 检查是否已经验证
   if (!isAdmin(request)) {
     return new Response('Unauthorized', {
       status: 401,
       headers: {
-        'WWW-Authenticate': 'Basic realm="Admin Area"'
+        'WWW-Authenticate': 'Basic realm="Instagram账号管理系统"'
       }
     });
   }
