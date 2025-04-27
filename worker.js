@@ -31,33 +31,27 @@ async function handleRequest(request) {
   if (path.startsWith('api/')) {
     return handleAPI(request)
   }
-  
-  // 处理轮询重定向（根路径）
-  if (path === '') {
-    return handleRedirect(request)
-  }
 
   // 处理特定账号的重定向
-  const account = await INSTAGRAM_ACCOUNTS.get(`shortcode:${path}`, 'json')
-  if (account) {
-    // 更新点击次数
-    account.clicks = (account.clicks || 0) + 1
-    account.lastUsed = Date.now()
-    await updateAccount(account)
-    
-    // 记录访问 IP
-    const clientIP = request.headers.get('CF-Connecting-IP')
-    await logAccess(account.username, clientIP)
-    
-    // 重定向到 Instagram 应用
-    return Response.redirect(`instagram://user?username=${account.username}`, 302)
+  if (path && path.length === 8) {
+    const account = await INSTAGRAM_ACCOUNTS.get(`shortcode:${path}`, 'json')
+    if (account) {
+      // 更新点击次数
+      account.clicks = (account.clicks || 0) + 1
+      account.lastUsed = Date.now()
+      await updateAccount(account)
+      
+      // 记录访问 IP
+      const clientIP = request.headers.get('CF-Connecting-IP')
+      await logAccess(account.username, clientIP)
+      
+      // 重定向到 Instagram 应用
+      return Response.redirect(`instagram://user?username=${account.username}`, 302)
+    }
   }
-
-  // 返回 404
-  return new Response(null, {
-    status: 404,
-    statusText: 'Not Found'
-  })
+  
+  // 默认重定向到管理界面
+  return Response.redirect(`${url.origin}/admin`, 302)
 }
 
 // 验证管理员身份
