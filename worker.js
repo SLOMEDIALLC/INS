@@ -14,14 +14,14 @@ function generateShortCode() {
 }
 
 // 验证管理员身份
-async function isAdmin(request) {
-  const auth = request.headers.get('Authorization')
-  if (!auth || !auth.startsWith('Basic ')) {
-    return false
+function isAdmin(request) {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    return false;
   }
-  
-  const [user, pass] = atob(auth.split(' ')[1]).split(':')
-  return user === ADMIN_USERNAME && pass === ADMIN_PASSWORD
+
+  const [username, password] = atob(authHeader.slice(6)).split(':');
+  return username === ADMIN_USERNAME && password === ADMIN_PASSWORD;
 }
 
 // 处理 API 请求
@@ -114,17 +114,17 @@ async function handleAPI(request) {
 
 // 处理请求的主函数
 async function handleRequest(request) {
-  const url = new URL(request.url)
-  const path = url.pathname.slice(1) // 移除开头的 /
-  
-  // 处理管理后台路由
+  const url = new URL(request.url);
+  const path = url.pathname.slice(1); // 移除开头的 /
+
+  // 处理管理界面
   if (path === 'admin') {
-    return handleAdmin(request)
+    return handleAdmin(request);
   }
-  
+
   // 处理 API 请求
   if (path.startsWith('api/')) {
-    return handleAPI(request)
+    return handleAPI(request);
   }
 
   // 如果路径为空，随机选择一个账号进行重定向
@@ -233,9 +233,6 @@ const adminHtml = `
   </div>
 
   <script>
-    const ADMIN_USERNAME = '${ADMIN_USERNAME}';
-    const ADMIN_PASSWORD = '${ADMIN_PASSWORD}';
-
     // 复制到剪贴板
     function copyToClipboard(elementId) {
       const element = document.getElementById(elementId);
@@ -248,9 +245,13 @@ const adminHtml = `
       try {
         const response = await fetch('/api/accounts', {
           headers: {
-            'Authorization': 'Basic ' + btoa(ADMIN_USERNAME + ':' + ADMIN_PASSWORD)
+            'Authorization': 'Basic ' + btoa('admin:password123')
           }
         });
+        
+        if (!response.ok) {
+          throw new Error('Failed to load accounts');
+        }
         
         const accounts = await response.json();
         const tbody = document.getElementById('accountsList');
@@ -262,16 +263,19 @@ const adminHtml = `
           const tr = document.createElement('tr');
           const shortCodeId = 'shortcode_' + account.shortCode;
           
+          const accountUrl = baseUrl + '/' + account.shortCode;
+          const lastUsedText = account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用';
+          
           tr.innerHTML = \`
             <td>\${account.username}</td>
             <td>
               <div class="input-group">
-                <input type="text" class="form-control" id="\${shortCodeId}" value="\${baseUrl}/\${account.shortCode}" readonly>
+                <input type="text" class="form-control" id="\${shortCodeId}" value="\${accountUrl}" readonly>
                 <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${shortCodeId}')">复制</button>
               </div>
             </td>
             <td>\${account.clicks || 0}</td>
-            <td>\${account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用'}</td>
+            <td>\${lastUsedText}</td>
             <td>
               <button onclick="deleteAccount('\${account.username}')" class="btn btn-sm btn-danger">删除</button>
             </td>
@@ -297,7 +301,7 @@ const adminHtml = `
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': 'Basic ' + btoa(ADMIN_USERNAME + ':' + ADMIN_PASSWORD)
+            'Authorization': 'Basic ' + btoa('admin:password123')
           },
           body: JSON.stringify({
             username,
@@ -330,7 +334,7 @@ const adminHtml = `
         const response = await fetch('/api/accounts/' + username, {
           method: 'DELETE',
           headers: {
-            'Authorization': 'Basic ' + btoa(ADMIN_USERNAME + ':' + ADMIN_PASSWORD)
+            'Authorization': 'Basic ' + btoa('admin:password123')
           }
         });
 
@@ -353,7 +357,7 @@ const adminHtml = `
         const response = await fetch('/api/stats/reset', {
           method: 'POST',
           headers: {
-            'Authorization': 'Basic ' + btoa(ADMIN_USERNAME + ':' + ADMIN_PASSWORD)
+            'Authorization': 'Basic ' + btoa('admin:password123')
           }
         });
 
@@ -397,9 +401,11 @@ async function listAccounts() {
     const list = await INSTAGRAM_ACCOUNTS.list({ prefix: '' });
     const accounts = [];
     for (const key of list.keys) {
-      const account = await INSTAGRAM_ACCOUNTS.get(key.name, 'json');
-      if (account) {
-        accounts.push(account);
+      if (!key.name.startsWith('shortcode:')) {
+        const account = await INSTAGRAM_ACCOUNTS.get(key.name, 'json');
+        if (account) {
+          accounts.push(account);
+        }
       }
     }
     return accounts;
@@ -409,29 +415,12 @@ async function listAccounts() {
   }
 }
 
-async function addAccount(username, shortCode) {
-  const account = {
-    username,
-    shortCode,
-    clicks: 0,
-    lastUsed: null
-  };
-  
-  await INSTAGRAM_ACCOUNTS.put(username, JSON.stringify(account));
-  await INSTAGRAM_ACCOUNTS.put(`shortcode:${shortCode}`, JSON.stringify(account));
-  return account;
-}
-
 async function updateAccount(account) {
-  await INSTAGRAM_ACCOUNTS.put(account.username, JSON.stringify(account));
-  await INSTAGRAM_ACCOUNTS.put(`shortcode:${account.shortCode}`, JSON.stringify(account));
-}
-
-async function deleteAccount(username) {
-  const account = await INSTAGRAM_ACCOUNTS.get(username, 'json');
-  if (account) {
-    await INSTAGRAM_ACCOUNTS.delete(username);
-    await INSTAGRAM_ACCOUNTS.delete(`shortcode:${account.shortCode}`);
+  try {
+    await INSTAGRAM_ACCOUNTS.put(account.username, JSON.stringify(account));
+    await INSTAGRAM_ACCOUNTS.put(`shortcode:${account.shortCode}`, JSON.stringify(account));
+  } catch (error) {
+    console.error('Error updating account:', error);
   }
 }
 
