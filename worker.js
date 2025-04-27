@@ -142,7 +142,8 @@ async function handleRequest(request) {
       return new Response('Unauthorized', {
         status: 401,
         headers: {
-          'WWW-Authenticate': 'Basic realm="Instagram账号管理系统"'
+          'WWW-Authenticate': 'Basic realm="Instagram Account Management System"',
+          'Cache-Control': 'no-store'
         }
       });
     }
@@ -152,7 +153,8 @@ async function handleRequest(request) {
       return new Response('Unauthorized', {
         status: 401,
         headers: {
-          'WWW-Authenticate': 'Basic realm="Instagram账号管理系统"'
+          'WWW-Authenticate': 'Basic realm="Instagram Account Management System"',
+          'Cache-Control': 'no-store'
         }
       });
     }
@@ -160,7 +162,10 @@ async function handleRequest(request) {
     // 替换模板中的变量
     const html = adminHtml.replace(/__ORIGIN__/g, origin);
     return new Response(html, {
-      headers: { 'Content-Type': 'text/html' }
+      headers: { 
+        'Content-Type': 'text/html',
+        'Cache-Control': 'no-store, private'
+      }
     });
   }
 
@@ -565,58 +570,13 @@ async function updateAccount(account) {
 
 // 创建Instagram应用跳转
 function createInstagramAppRedirect(username) {
-  // 创建一个HTML页面，包含自动跳转到Instagram应用的脚本
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>跳转到Instagram</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-      padding: 20px;
+  // 直接重定向到Instagram应用，不使用中间页面
+  return new Response('', {
+    status: 302,
+    headers: {
+      'Location': `instagram://user?username=${username}`,
+      'Cache-Control': 'no-store'
     }
-    .loading {
-      margin: 20px auto;
-    }
-    .btn {
-      display: inline-block;
-      margin: 10px;
-      padding: 10px 20px;
-      background-color: #0095f6;
-      color: white;
-      text-decoration: none;
-      border-radius: 5px;
-    }
-  </style>
-</head>
-<body>
-  <h1>正在跳转到Instagram...</h1>
-  <div class="loading">
-    <img src="https://c.tenor.com/I6kN-6X7nhAAAAAj/loading-buffering.gif" alt="Loading" width="50">
-  </div>
-  <p>如果没有自动跳转，请点击下面的按钮：</p>
-  <a href="instagram://user?username=${username}" class="btn">打开Instagram应用</a>
-  <a href="https://instagram.com/${username}" class="btn">在浏览器中打开</a>
-
-  <script>
-    // 尝试打开Instagram应用
-    window.location.href = "instagram://user?username=${username}";
-    
-    // 如果3秒后仍在此页面，则可能没有安装Instagram应用，自动跳转到网页版
-    setTimeout(function() {
-      window.location.href = "https://instagram.com/${username}";
-    }, 3000);
-  </script>
-</body>
-</html>
-  `;
-  
-  return new Response(html, {
-    headers: { 'Content-Type': 'text/html' }
   });
 }
 
