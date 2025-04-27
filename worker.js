@@ -43,7 +43,7 @@ async function handleAPI(request) {
     }
     
     if (request.method === 'POST') {
-      const { username, shortCode, customUrl } = await request.json();
+      const { username, shortCode } = await request.json();
       
       // 验证用户名格式
       if (!username || typeof username !== 'string') {
@@ -51,13 +51,8 @@ async function handleAPI(request) {
       }
 
       // 验证短代码格式
-      if (shortCode && (typeof shortCode !== 'string' || shortCode.length !== 8)) {
-        return new Response('Short code must be 8 characters', { status: 400 });
-      }
-
-      // 验证自定义链接格式
-      if (customUrl && typeof customUrl !== 'string') {
-        return new Response('Invalid custom URL', { status: 400 });
+      if (!shortCode || typeof shortCode !== 'string') {
+        return new Response('Short code is required', { status: 400 });
       }
 
       // 检查用户名是否已存在
@@ -67,36 +62,22 @@ async function handleAPI(request) {
       }
 
       // 检查短代码是否已存在
-      if (shortCode) {
-        const existingShortCode = await INSTAGRAM_ACCOUNTS.get(`shortcode:${shortCode}`, 'json');
-        if (existingShortCode) {
-          return new Response('Short code already exists', { status: 400 });
-        }
+      const existingShortCode = await INSTAGRAM_ACCOUNTS.get(`shortcode:${shortCode}`, 'json');
+      if (existingShortCode) {
+        return new Response('Short code already exists', { status: 400 });
       }
 
-      // 检查自定义链接是否已存在
-      if (customUrl) {
-        const accounts = await listAccounts();
-        if (accounts.some(a => a.customUrl === customUrl)) {
-          return new Response('Custom URL already exists', { status: 400 });
-        }
-      }
-
-      // 生成或使用提供的短代码
-      const finalShortCode = shortCode || generateShortCode();
-      
       // 创建新账号
       const account = {
         username,
-        shortCode: finalShortCode,
-        customUrl: customUrl || null,
+        shortCode,
         clicks: 0,
         lastUsed: null
       };
 
       // 保存账号信息
       await INSTAGRAM_ACCOUNTS.put(username, JSON.stringify(account));
-      await INSTAGRAM_ACCOUNTS.put(`shortcode:${finalShortCode}`, JSON.stringify(account));
+      await INSTAGRAM_ACCOUNTS.put(`shortcode:${shortCode}`, JSON.stringify(account));
 
       return new Response(JSON.stringify(account), {
         headers: { 'Content-Type': 'application/json' }
@@ -146,37 +127,43 @@ async function handleRequest(request) {
     return handleAPI(request)
   }
 
-  // 处理重定向
-  if (path) {
-    // 先检查是否是短代码
-    let account = await INSTAGRAM_ACCOUNTS.get(`shortcode:${path}`, 'json')
-    
-    if (!account) {
-      // 遍历所有账号查找匹配的自定义链接
-      const accountsList = await listAccounts()
-      account = accountsList.find(a => a.customUrl === path)
+  // 如果路径为空，随机选择一个账号进行重定向
+  if (path === '') {
+    const accounts = await listAccounts();
+    if (accounts.length === 0) {
+      return new Response('No accounts available', { status: 404 });
     }
 
-    if (account) {
-      // 更新点击次数
-      account.clicks = (account.clicks || 0) + 1
-      account.lastUsed = Date.now()
-      await updateAccount(account)
-      
-      // 记录访问 IP
-      const clientIP = request.headers.get('CF-Connecting-IP')
-      await logAccess(account.username, clientIP)
-      
-      // 重定向到 Instagram 应用
-      return Response.redirect(`instagram://user?username=${account.username}`, 302)
-    }
+    // 随机选择一个账号
+    const randomAccount = accounts[Math.floor(Math.random() * accounts.length)];
+    
+    // 更新点击次数和最后使用时间
+    randomAccount.clicks++;
+    randomAccount.lastUsed = new Date().toISOString();
+    await updateAccount(randomAccount);
+
+    return Response.redirect(`https://instagram.com/${randomAccount.username}`, 302);
   }
-  
-  // 默认重定向到管理界面
-  return Response.redirect(`${url.origin}/admin`, 302)
+
+  // 处理短代码重定向
+  const account = await INSTAGRAM_ACCOUNTS.get(`shortcode:${path}`, 'json');
+  if (account) {
+    // 更新点击次数和最后使用时间
+    account.clicks++;
+    account.lastUsed = new Date().toISOString();
+    await updateAccount(account);
+
+    return Response.redirect(`https://instagram.com/${account.username}`, 302);
+  }
+
+  // 返回 404 页面
+  return new Response(notFoundHtml, {
+    status: 404,
+    headers: { 'Content-Type': 'text/html' }
+  });
 }
 
-// 修改管理界面HTML
+// 管理界面 HTML
 async function handleAdmin(request) {
   if (!isAdmin(request)) {
     return new Response('Unauthorized', {
@@ -194,62 +181,45 @@ async function handleAdmin(request) {
     <html>
     <head>
       <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Instagram 账号管理</title>
       <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-      <style>
-        body { padding: 20px; }
-        .container { max-width: 1200px; }
-      </style>
     </head>
     <body>
-      <div class="container">
+      <div class="container mt-5">
         <h1 class="mb-4">Instagram 账号管理</h1>
         
         <div class="card mb-4">
           <div class="card-body">
             <h5 class="card-title">添加新账号</h5>
-            <form id="addForm" class="row g-3">
-              <div class="col-md-3">
-                <label class="form-label">Instagram 用户名</label>
-                <input type="text" class="form-control" id="username" required>
+            <form id="addForm">
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label class="form-label">Instagram 用户名</label>
+                  <input type="text" class="form-control" id="username" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">自定义短代码 (必填)</label>
+                  <input type="text" class="form-control" id="shortCode" required>
+                </div>
               </div>
-              <div class="col-md-3">
-                <label class="form-label">自定义短代码（8位）</label>
-                <input type="text" class="form-control" id="shortCode" pattern="[A-Za-z0-9]{8}" maxlength="8">
-              </div>
-              <div class="col-md-3">
-                <label class="form-label">自定义链接</label>
-                <input type="text" class="form-control" id="customUrl">
-              </div>
-              <div class="col-md-3">
-                <label class="form-label">&nbsp;</label>
-                <button type="submit" class="btn btn-primary d-block">添加账号</button>
-              </div>
+              <button type="submit" class="btn btn-primary mt-3">添加账号</button>
             </form>
-          </div>
-        </div>
-
-        <div class="card mb-4">
-          <div class="card-body">
-            <h5 class="card-title">轮询地址</h5>
-            <div class="input-group">
-              <input type="text" class="form-control" id="rotateUrl" value="${baseUrl}" readonly>
-              <button class="btn btn-outline-secondary" onclick="copyToClipboard('rotateUrl')">复制</button>
-            </div>
-            <small class="text-muted">访问此地址将自动轮询所有账号</small>
           </div>
         </div>
 
         <div class="card">
           <div class="card-body">
-            <h5 class="card-title">账号列表</h5>
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h5 class="card-title mb-0">账号列表</h5>
+              <button onclick="resetStats()" class="btn btn-warning">重置统计</button>
+            </div>
             <div class="table-responsive">
               <table class="table">
                 <thead>
                   <tr>
                     <th>用户名</th>
-                    <th>短链接</th>
-                    <th>自定义链接</th>
+                    <th>访问链接</th>
                     <th>点击次数</th>
                     <th>最后使用时间</th>
                     <th>操作</th>
@@ -258,7 +228,6 @@ async function handleAdmin(request) {
                 <tbody id="accountsList"></tbody>
               </table>
             </div>
-            <button onclick="resetStats()" class="btn btn-warning">重置统计</button>
           </div>
         </div>
       </div>
@@ -275,7 +244,7 @@ async function handleAdmin(request) {
         async function loadAccounts() {
           const response = await fetch('/api/accounts', {
             headers: {
-              'Authorization': 'Basic ' + btoa("${ADMIN_USERNAME}:${ADMIN_PASSWORD}")
+              'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
             }
           });
           
@@ -288,7 +257,6 @@ async function handleAdmin(request) {
           accounts.forEach(account => {
             const tr = document.createElement('tr');
             const shortCodeId = 'shortcode_' + account.shortCode;
-            const customUrlId = 'customurl_' + account.shortCode;
             
             tr.innerHTML = \`
               <td>\${account.username}</td>
@@ -297,14 +265,6 @@ async function handleAdmin(request) {
                   <input type="text" class="form-control" id="\${shortCodeId}" value="\${baseUrl}/\${account.shortCode}" readonly>
                   <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${shortCodeId}')">复制</button>
                 </div>
-              </td>
-              <td>
-                \${account.customUrl ? \`
-                  <div class="input-group">
-                    <input type="text" class="form-control" id="\${customUrlId}" value="\${baseUrl}/\${account.customUrl}" readonly>
-                    <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${customUrlId}')">复制</button>
-                  </div>
-                \` : '-'}
               </td>
               <td>\${account.clicks || 0}</td>
               <td>\${account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用'}</td>
@@ -322,7 +282,6 @@ async function handleAdmin(request) {
           
           const username = document.getElementById('username').value;
           const shortCode = document.getElementById('shortCode').value;
-          const customUrl = document.getElementById('customUrl').value;
           
           try {
             const response = await fetch('/api/accounts', {
@@ -333,8 +292,7 @@ async function handleAdmin(request) {
               },
               body: JSON.stringify({
                 username,
-                shortCode: shortCode || undefined,
-                customUrl: customUrl || undefined
+                shortCode
               })
             });
 
@@ -347,7 +305,6 @@ async function handleAdmin(request) {
             // 清空输入框
             document.getElementById('username').value = '';
             document.getElementById('shortCode').value = '';
-            document.getElementById('customUrl').value = '';
             
             // 重新加载账号列表
             loadAccounts();
@@ -361,7 +318,7 @@ async function handleAdmin(request) {
           if (!confirm('确定要删除这个账号吗？')) return;
           
           try {
-            const response = await fetch(\`/api/accounts/\${username}\`, {
+            const response = await fetch(`/api/accounts/\${username}`, {
               method: 'DELETE',
               headers: {
                 'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
@@ -419,7 +376,7 @@ async function handleAdmin(request) {
 // KV 操作函数
 async function listAccounts() {
   try {
-    const list = await INSTAGRAM_ACCOUNTS.list({ prefix: 'account:' });
+    const list = await INSTAGRAM_ACCOUNTS.list({ prefix: '' });
     const accounts = [];
     for (const key of list.keys) {
       const account = await INSTAGRAM_ACCOUNTS.get(key.name, 'json');
@@ -434,11 +391,10 @@ async function listAccounts() {
   }
 }
 
-async function addAccount(username, shortCode, customUrl) {
+async function addAccount(username, shortCode) {
   const account = {
     username,
     shortCode,
-    customUrl,
     clicks: 0,
     lastUsed: null
   };
@@ -459,12 +415,6 @@ async function deleteAccount(username) {
     await INSTAGRAM_ACCOUNTS.delete(username);
     await INSTAGRAM_ACCOUNTS.delete(`shortcode:${account.shortCode}`);
   }
-}
-
-async function logAccess(username, ip) {
-  const now = Date.now();
-  const logKey = `log:${now}`;
-  await INSTAGRAM_ACCOUNTS.put(logKey, JSON.stringify({ username, ip, timestamp: now }));
 }
 
 // 监听请求事件
