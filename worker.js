@@ -26,53 +26,109 @@ async function isAdmin(request) {
 
 // 处理 API 请求
 async function handleAPI(request) {
-  const url = new URL(request.url)
-  const path = url.pathname.slice(5) // 移除开头的 /api/
+  const url = new URL(request.url);
+  const path = url.pathname.slice(5); // 移除开头的 /api/
 
   // 验证管理员身份
   if (!isAdmin(request)) {
-    return new Response('Unauthorized', { status: 401 })
+    return new Response('Unauthorized', { status: 401 });
   }
 
-  if (path === 'accounts' && request.method === 'POST') {
-    const { username, shortCode, customUrl } = await request.json()
+  if (path === 'accounts') {
+    if (request.method === 'GET') {
+      const accounts = await listAccounts();
+      return new Response(JSON.stringify(accounts), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
     
-    // 验证用户名格式
-    if (!username || typeof username !== 'string') {
-      return new Response('Invalid username', { status: 400 })
+    if (request.method === 'POST') {
+      const { username, shortCode, customUrl } = await request.json();
+      
+      // 验证用户名格式
+      if (!username || typeof username !== 'string') {
+        return new Response('Invalid username', { status: 400 });
+      }
+
+      // 验证短代码格式
+      if (shortCode && (typeof shortCode !== 'string' || shortCode.length !== 8)) {
+        return new Response('Short code must be 8 characters', { status: 400 });
+      }
+
+      // 验证自定义链接格式
+      if (customUrl && typeof customUrl !== 'string') {
+        return new Response('Invalid custom URL', { status: 400 });
+      }
+
+      // 检查用户名是否已存在
+      const existingAccount = await INSTAGRAM_ACCOUNTS.get(username, 'json');
+      if (existingAccount) {
+        return new Response('Username already exists', { status: 400 });
+      }
+
+      // 检查短代码是否已存在
+      if (shortCode) {
+        const existingShortCode = await INSTAGRAM_ACCOUNTS.get(`shortcode:${shortCode}`, 'json');
+        if (existingShortCode) {
+          return new Response('Short code already exists', { status: 400 });
+        }
+      }
+
+      // 检查自定义链接是否已存在
+      if (customUrl) {
+        const accounts = await listAccounts();
+        if (accounts.some(a => a.customUrl === customUrl)) {
+          return new Response('Custom URL already exists', { status: 400 });
+        }
+      }
+
+      // 生成或使用提供的短代码
+      const finalShortCode = shortCode || generateShortCode();
+      
+      // 创建新账号
+      const account = {
+        username,
+        shortCode: finalShortCode,
+        customUrl: customUrl || null,
+        clicks: 0,
+        lastUsed: null
+      };
+
+      // 保存账号信息
+      await INSTAGRAM_ACCOUNTS.put(username, JSON.stringify(account));
+      await INSTAGRAM_ACCOUNTS.put(`shortcode:${finalShortCode}`, JSON.stringify(account));
+
+      return new Response(JSON.stringify(account), {
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
-
-    // 如果提供了自定义短代码，验证其格式
-    if (shortCode && (typeof shortCode !== 'string' || shortCode.length !== 8)) {
-      return new Response('Short code must be 8 characters', { status: 400 })
-    }
-
-    // 如果提供了自定义链接，验证其格式
-    if (customUrl && typeof customUrl !== 'string') {
-      return new Response('Invalid custom URL', { status: 400 })
-    }
-
-    // 生成或使用提供的短代码
-    const finalShortCode = shortCode || generateShortCode()
-    
-    // 保存账号信息
-    const account = {
-      username,
-      shortCode: finalShortCode,
-      customUrl: customUrl || null,
-      clicks: 0,
-      lastUsed: null
-    }
-
-    await INSTAGRAM_ACCOUNTS.put(username, JSON.stringify(account))
-    await INSTAGRAM_ACCOUNTS.put(`shortcode:${finalShortCode}`, JSON.stringify(account))
-
-    return new Response(JSON.stringify(account), {
-      headers: { 'Content-Type': 'application/json' }
-    })
   }
 
-  // 其他 API 处理保持不变...
+  if (path.startsWith('accounts/')) {
+    const username = path.slice(9); // 移除 accounts/
+    
+    if (request.method === 'DELETE') {
+      const account = await INSTAGRAM_ACCOUNTS.get(username, 'json');
+      if (account) {
+        await INSTAGRAM_ACCOUNTS.delete(username);
+        await INSTAGRAM_ACCOUNTS.delete(`shortcode:${account.shortCode}`);
+        return new Response('OK');
+      }
+      return new Response('Account not found', { status: 404 });
+    }
+  }
+
+  if (path === 'stats/reset' && request.method === 'POST') {
+    const accounts = await listAccounts();
+    for (const account of accounts) {
+      account.clicks = 0;
+      account.lastUsed = null;
+      await updateAccount(account);
+    }
+    return new Response('OK');
+  }
+
+  return new Response('Not Found', { status: 404 });
 }
 
 // 处理请求的主函数
@@ -128,11 +184,10 @@ async function handleAdmin(request) {
       headers: {
         'WWW-Authenticate': 'Basic realm="Admin Area"'
       }
-    })
+    });
   }
 
-  const accounts = await listAccounts()
-  const baseUrl = new URL(request.url).origin
+  const baseUrl = new URL(request.url).origin;
 
   const html = `
     <!DOCTYPE html>
@@ -143,7 +198,7 @@ async function handleAdmin(request) {
       <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
       <style>
         body { padding: 20px; }
-        .container { max-width: 1000px; }
+        .container { max-width: 1200px; }
       </style>
     </head>
     <body>
@@ -154,38 +209,55 @@ async function handleAdmin(request) {
           <div class="card-body">
             <h5 class="card-title">添加新账号</h5>
             <form id="addForm" class="row g-3">
-              <div class="col-md-4">
-                <input type="text" class="form-control" id="username" placeholder="Instagram 用户名" required>
+              <div class="col-md-3">
+                <label class="form-label">Instagram 用户名</label>
+                <input type="text" class="form-control" id="username" required>
               </div>
               <div class="col-md-3">
-                <input type="text" class="form-control" id="shortCode" placeholder="自定义8位短代码（选填）" maxlength="8">
+                <label class="form-label">自定义短代码（8位）</label>
+                <input type="text" class="form-control" id="shortCode" pattern="[A-Za-z0-9]{8}" maxlength="8">
               </div>
               <div class="col-md-3">
-                <input type="text" class="form-control" id="customUrl" placeholder="自定义链接（选填）">
+                <label class="form-label">自定义链接</label>
+                <input type="text" class="form-control" id="customUrl">
               </div>
-              <div class="col-md-2">
-                <button type="submit" class="btn btn-primary">添加</button>
+              <div class="col-md-3">
+                <label class="form-label">&nbsp;</label>
+                <button type="submit" class="btn btn-primary d-block">添加账号</button>
               </div>
             </form>
+          </div>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-body">
+            <h5 class="card-title">轮询地址</h5>
+            <div class="input-group">
+              <input type="text" class="form-control" id="rotateUrl" value="${baseUrl}" readonly>
+              <button class="btn btn-outline-secondary" onclick="copyToClipboard('rotateUrl')">复制</button>
+            </div>
+            <small class="text-muted">访问此地址将自动轮询所有账号</small>
           </div>
         </div>
 
         <div class="card">
           <div class="card-body">
             <h5 class="card-title">账号列表</h5>
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>用户名</th>
-                  <th>短链接</th>
-                  <th>自定义链接</th>
-                  <th>点击次数</th>
-                  <th>最后使用时间</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="accountsList"></tbody>
-            </table>
+            <div class="table-responsive">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>用户名</th>
+                    <th>短链接</th>
+                    <th>自定义链接</th>
+                    <th>点击次数</th>
+                    <th>最后使用时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="accountsList"></tbody>
+              </table>
+            </div>
             <button onclick="resetStats()" class="btn btn-warning">重置统计</button>
           </div>
         </div>
@@ -203,7 +275,7 @@ async function handleAdmin(request) {
         async function loadAccounts() {
           const response = await fetch('/api/accounts', {
             headers: {
-              'Authorization': 'Basic ' + btoa(`${ADMIN_USERNAME}:${ADMIN_PASSWORD}`)
+              'Authorization': 'Basic ' + btoa("${ADMIN_USERNAME}:${ADMIN_PASSWORD}")
             }
           });
           
@@ -223,14 +295,14 @@ async function handleAdmin(request) {
               <td>
                 <div class="input-group">
                   <input type="text" class="form-control" id="\${shortCodeId}" value="\${baseUrl}/\${account.shortCode}" readonly>
-                  <button class="btn btn-outline-secondary copy-btn" onclick="copyToClipboard('\${shortCodeId}')">复制</button>
+                  <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${shortCodeId}')">复制</button>
                 </div>
               </td>
               <td>
                 \${account.customUrl ? \`
                   <div class="input-group">
                     <input type="text" class="form-control" id="\${customUrlId}" value="\${baseUrl}/\${account.customUrl}" readonly>
-                    <button class="btn btn-outline-secondary copy-btn" onclick="copyToClipboard('\${customUrlId}')">复制</button>
+                    <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${customUrlId}')">复制</button>
                   </div>
                 \` : '-'}
               </td>
@@ -247,55 +319,87 @@ async function handleAdmin(request) {
         // 添加账号
         document.getElementById('addForm').onsubmit = async (e) => {
           e.preventDefault();
+          
           const username = document.getElementById('username').value;
           const shortCode = document.getElementById('shortCode').value;
           const customUrl = document.getElementById('customUrl').value;
           
-          await fetch('/api/accounts', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Basic ' + btoa(`${ADMIN_USERNAME}:${ADMIN_PASSWORD}`)
-            },
-            body: JSON.stringify({ 
-              username,
-              shortCode: shortCode || undefined,
-              customUrl: customUrl || undefined
-            })
-          });
+          try {
+            const response = await fetch('/api/accounts', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
+              },
+              body: JSON.stringify({
+                username,
+                shortCode: shortCode || undefined,
+                customUrl: customUrl || undefined
+              })
+            });
 
-          document.getElementById('username').value = '';
-          document.getElementById('shortCode').value = '';
-          document.getElementById('customUrl').value = '';
-          loadAccounts();
+            if (!response.ok) {
+              const error = await response.text();
+              alert('添加失败: ' + error);
+              return;
+            }
+
+            // 清空输入框
+            document.getElementById('username').value = '';
+            document.getElementById('shortCode').value = '';
+            document.getElementById('customUrl').value = '';
+            
+            // 重新加载账号列表
+            loadAccounts();
+          } catch (error) {
+            alert('添加失败: ' + error.message);
+          }
         };
 
         // 删除账号
         async function deleteAccount(username) {
           if (!confirm('确定要删除这个账号吗？')) return;
           
-          await fetch(`/api/accounts/${username}`, {
-            method: 'DELETE',
-            headers: {
-              'Authorization': 'Basic ' + btoa(`${ADMIN_USERNAME}:${ADMIN_PASSWORD}`)
+          try {
+            const response = await fetch(\`/api/accounts/\${username}\`, {
+              method: 'DELETE',
+              headers: {
+                'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
+              }
+            });
+
+            if (!response.ok) {
+              alert('删除失败');
+              return;
             }
-          });
-          
-          loadAccounts();
+
+            loadAccounts();
+          } catch (error) {
+            alert('删除失败: ' + error.message);
+          }
         }
 
         // 重置统计
         async function resetStats() {
           if (!confirm('确定要重置所有统计数据吗？')) return;
           
-          await fetch('/api/stats/reset', {
-            method: 'POST',
-            headers: {
-              'Authorization': 'Basic ' + btoa(`${ADMIN_USERNAME}:${ADMIN_PASSWORD}`)
+          try {
+            const response = await fetch('/api/stats/reset', {
+              method: 'POST',
+              headers: {
+                'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
+              }
+            });
+
+            if (!response.ok) {
+              alert('重置失败');
+              return;
             }
-          });
-          
-          loadAccounts();
+
+            loadAccounts();
+          } catch (error) {
+            alert('重置失败: ' + error.message);
+          }
         }
 
         // 页面加载完成后加载账号列表
