@@ -106,7 +106,7 @@ async function handleAdmin(request) {
             async function loadAccounts() {
                 const response = await fetch('/api/accounts', {
                     headers: {
-                        'Authorization': 'Basic ' + btoa('${ADMIN_USERNAME}:${ADMIN_PASSWORD}')
+                        'Authorization': 'Basic ' + btoa(\`${ADMIN_USERNAME}:${ADMIN_PASSWORD}\`)
                     }
                 });
                 const accounts = await response.json();
@@ -135,7 +135,7 @@ async function handleAdmin(request) {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': 'Basic ' + btoa('${ADMIN_USERNAME}:${ADMIN_PASSWORD}')
+                        'Authorization': 'Basic ' + btoa(\`${ADMIN_USERNAME}:${ADMIN_PASSWORD}\`)
                     },
                     body: JSON.stringify({ username })
                 });
@@ -151,7 +151,7 @@ async function handleAdmin(request) {
                 await fetch(\`/api/accounts/\${username}\`, {
                     method: 'DELETE',
                     headers: {
-                        'Authorization': 'Basic ' + btoa('${ADMIN_USERNAME}:${ADMIN_PASSWORD}')
+                        'Authorization': 'Basic ' + btoa(\`${ADMIN_USERNAME}:${ADMIN_PASSWORD}\`)
                     }
                 });
                 
@@ -232,7 +232,7 @@ async function handleRedirect(request) {
   await logAccess(selectedAccount.username, clientIP)
 
   // 重定向到 Instagram 应用
-  return Response.redirect(\`instagram://user?username=\${selectedAccount.username.replace('@', '')}\`, 302)
+  return Response.redirect(`instagram://user?username=${selectedAccount.username.replace('@', '')}`, 302);
 }
 
 // KV 操作函数
@@ -254,19 +254,19 @@ async function addAccount(username) {
     clicks: 0,
     lastUsed: 0
   }
-  await INSTAGRAM_ACCOUNTS.put(\`account:\${username}\`, JSON.stringify(account))
+  await INSTAGRAM_ACCOUNTS.put(`account:${username}`, JSON.stringify(account))
 }
 
 async function updateAccount(account) {
-  await INSTAGRAM_ACCOUNTS.put(\`account:\${account.username}\`, JSON.stringify(account))
+  await INSTAGRAM_ACCOUNTS.put(`account:${account.username}`, JSON.stringify(account))
 }
 
 async function deleteAccount(username) {
-  await INSTAGRAM_ACCOUNTS.delete(\`account:\${username}\`)
+  await INSTAGRAM_ACCOUNTS.delete(`account:${username}`)
 }
 
 async function logAccess(username, ip) {
   const now = new Date().toISOString()
-  const logKey = \`log:\${now}\`
+  const logKey = `log:${now}`
   await INSTAGRAM_ACCOUNTS.put(logKey, JSON.stringify({ username, ip, timestamp: now }))
 }
