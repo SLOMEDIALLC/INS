@@ -164,6 +164,218 @@ async function handleRequest(request) {
 }
 
 // 管理界面 HTML
+const adminHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Instagram 账号管理</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+  <div class="container mt-5">
+    <h1 class="mb-4">Instagram 账号管理</h1>
+    
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5 class="card-title">添加新账号</h5>
+        <form id="addForm">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Instagram 用户名</label>
+              <input type="text" class="form-control" id="username" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">自定义短代码</label>
+              <input type="text" class="form-control" id="shortCode" required>
+              <div class="form-text">这将作为访问链接的一部分，例如: https://instagram-redirect.w00.workers.dev/你的短代码</div>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary mt-3">添加账号</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5 class="card-title">轮询地址</h5>
+        <div class="input-group">
+          <input type="text" class="form-control" id="rotateUrl" value="${window.location.origin}" readonly>
+          <button class="btn btn-outline-secondary" onclick="copyToClipboard('rotateUrl')">复制</button>
+        </div>
+        <small class="text-muted">访问此地址将随机跳转到一个账号</small>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="card-title mb-0">账号列表</h5>
+          <button onclick="resetStats()" class="btn btn-warning">重置统计</button>
+        </div>
+        <div class="table-responsive">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>用户名</th>
+                <th>访问链接</th>
+                <th>点击次数</th>
+                <th>最后使用时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="accountsList"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const ADMIN_USERNAME = '${ADMIN_USERNAME}';
+    const ADMIN_PASSWORD = '${ADMIN_PASSWORD}';
+
+    // 复制到剪贴板
+    function copyToClipboard(elementId) {
+      const element = document.getElementById(elementId);
+      element.select();
+      document.execCommand('copy');
+    }
+
+    // 加载账号列表
+    async function loadAccounts() {
+      try {
+        const response = await fetch('/api/accounts', {
+          headers: {
+            'Authorization': 'Basic ' + btoa(ADMIN_USERNAME + ':' + ADMIN_PASSWORD)
+          }
+        });
+        
+        const accounts = await response.json();
+        const tbody = document.getElementById('accountsList');
+        tbody.innerHTML = '';
+        
+        const baseUrl = window.location.origin;
+        
+        accounts.forEach(account => {
+          const tr = document.createElement('tr');
+          const shortCodeId = 'shortcode_' + account.shortCode;
+          
+          tr.innerHTML = \`
+            <td>\${account.username}</td>
+            <td>
+              <div class="input-group">
+                <input type="text" class="form-control" id="\${shortCodeId}" value="\${baseUrl}/\${account.shortCode}" readonly>
+                <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${shortCodeId}')">复制</button>
+              </div>
+            </td>
+            <td>\${account.clicks || 0}</td>
+            <td>\${account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用'}</td>
+            <td>
+              <button onclick="deleteAccount('\${account.username}')" class="btn btn-sm btn-danger">删除</button>
+            </td>
+          \`;
+          
+          tbody.appendChild(tr);
+        });
+      } catch (error) {
+        console.error('加载账号列表失败:', error);
+        alert('加载账号列表失败');
+      }
+    }
+
+    // 添加账号
+    document.getElementById('addForm').onsubmit = async (e) => {
+      e.preventDefault();
+      
+      const username = document.getElementById('username').value;
+      const shortCode = document.getElementById('shortCode').value;
+      
+      try {
+        const response = await fetch('/api/accounts', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Basic ' + btoa(ADMIN_USERNAME + ':' + ADMIN_PASSWORD)
+          },
+          body: JSON.stringify({
+            username,
+            shortCode
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.text();
+          alert('添加失败: ' + error);
+          return;
+        }
+
+        // 清空输入框
+        document.getElementById('username').value = '';
+        document.getElementById('shortCode').value = '';
+        
+        // 重新加载账号列表
+        loadAccounts();
+      } catch (error) {
+        alert('添加失败: ' + error.message);
+      }
+    };
+
+    // 删除账号
+    async function deleteAccount(username) {
+      if (!confirm('确定要删除这个账号吗？')) return;
+      
+      try {
+        const response = await fetch('/api/accounts/' + username, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': 'Basic ' + btoa(ADMIN_USERNAME + ':' + ADMIN_PASSWORD)
+          }
+        });
+
+        if (!response.ok) {
+          alert('删除失败');
+          return;
+        }
+
+        loadAccounts();
+      } catch (error) {
+        alert('删除失败: ' + error.message);
+      }
+    }
+
+    // 重置统计
+    async function resetStats() {
+      if (!confirm('确定要重置所有统计数据吗？')) return;
+      
+      try {
+        const response = await fetch('/api/stats/reset', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Basic ' + btoa(ADMIN_USERNAME + ':' + ADMIN_PASSWORD)
+          }
+        });
+
+        if (!response.ok) {
+          alert('重置失败');
+          return;
+        }
+
+        loadAccounts();
+      } catch (error) {
+        alert('重置失败: ' + error.message);
+      }
+    }
+
+    // 页面加载完成后加载账号列表
+    loadAccounts();
+  </script>
+</body>
+</html>
+`;
+
+// 处理管理界面
 async function handleAdmin(request) {
   if (!isAdmin(request)) {
     return new Response('Unauthorized', {
@@ -174,202 +386,8 @@ async function handleAdmin(request) {
     });
   }
 
-  const baseUrl = new URL(request.url).origin;
-
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Instagram 账号管理</title>
-      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    </head>
-    <body>
-      <div class="container mt-5">
-        <h1 class="mb-4">Instagram 账号管理</h1>
-        
-        <div class="card mb-4">
-          <div class="card-body">
-            <h5 class="card-title">添加新账号</h5>
-            <form id="addForm">
-              <div class="row g-3">
-                <div class="col-md-6">
-                  <label class="form-label">Instagram 用户名</label>
-                  <input type="text" class="form-control" id="username" required>
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">自定义短代码 (必填)</label>
-                  <input type="text" class="form-control" id="shortCode" required>
-                </div>
-              </div>
-              <button type="submit" class="btn btn-primary mt-3">添加账号</button>
-            </form>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-body">
-            <div class="d-flex justify-content-between align-items-center mb-3">
-              <h5 class="card-title mb-0">账号列表</h5>
-              <button onclick="resetStats()" class="btn btn-warning">重置统计</button>
-            </div>
-            <div class="table-responsive">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th>用户名</th>
-                    <th>访问链接</th>
-                    <th>点击次数</th>
-                    <th>最后使用时间</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody id="accountsList"></tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <script>
-        // 复制到剪贴板
-        function copyToClipboard(elementId) {
-          const element = document.getElementById(elementId);
-          element.select();
-          document.execCommand('copy');
-        }
-
-        // 加载账号列表
-        async function loadAccounts() {
-          const response = await fetch('/api/accounts', {
-            headers: {
-              'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
-            }
-          });
-          
-          const accounts = await response.json();
-          const tbody = document.getElementById('accountsList');
-          tbody.innerHTML = '';
-          
-          const baseUrl = window.location.origin;
-          
-          accounts.forEach(account => {
-            const tr = document.createElement('tr');
-            const shortCodeId = 'shortcode_' + account.shortCode;
-            
-            tr.innerHTML = \`
-              <td>\${account.username}</td>
-              <td>
-                <div class="input-group">
-                  <input type="text" class="form-control" id="\${shortCodeId}" value="\${baseUrl}/\${account.shortCode}" readonly>
-                  <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${shortCodeId}')">复制</button>
-                </div>
-              </td>
-              <td>\${account.clicks || 0}</td>
-              <td>\${account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用'}</td>
-              <td>
-                <button onclick="deleteAccount('\${account.username}')" class="btn btn-sm btn-danger">删除</button>
-              </td>
-            \`;
-            tbody.appendChild(tr);
-          });
-        }
-
-        // 添加账号
-        document.getElementById('addForm').onsubmit = async (e) => {
-          e.preventDefault();
-          
-          const username = document.getElementById('username').value;
-          const shortCode = document.getElementById('shortCode').value;
-          
-          try {
-            const response = await fetch('/api/accounts', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
-              },
-              body: JSON.stringify({
-                username,
-                shortCode
-              })
-            });
-
-            if (!response.ok) {
-              const error = await response.text();
-              alert('添加失败: ' + error);
-              return;
-            }
-
-            // 清空输入框
-            document.getElementById('username').value = '';
-            document.getElementById('shortCode').value = '';
-            
-            // 重新加载账号列表
-            loadAccounts();
-          } catch (error) {
-            alert('添加失败: ' + error.message);
-          }
-        };
-
-        // 删除账号
-        async function deleteAccount(username) {
-          if (!confirm('确定要删除这个账号吗？')) return;
-          
-          try {
-            const response = await fetch(`/api/accounts/\${username}`, {
-              method: 'DELETE',
-              headers: {
-                'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
-              }
-            });
-
-            if (!response.ok) {
-              alert('删除失败');
-              return;
-            }
-
-            loadAccounts();
-          } catch (error) {
-            alert('删除失败: ' + error.message);
-          }
-        }
-
-        // 重置统计
-        async function resetStats() {
-          if (!confirm('确定要重置所有统计数据吗？')) return;
-          
-          try {
-            const response = await fetch('/api/stats/reset', {
-              method: 'POST',
-              headers: {
-                'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
-              }
-            });
-
-            if (!response.ok) {
-              alert('重置失败');
-              return;
-            }
-
-            loadAccounts();
-          } catch (error) {
-            alert('重置失败: ' + error.message);
-          }
-        }
-
-        // 页面加载完成后加载账号列表
-        loadAccounts();
-      </script>
-    </body>
-    </html>
-  `;
-
-  return new Response(html, {
-    headers: {
-      'Content-Type': 'text/html;charset=UTF-8'
-    }
+  return new Response(adminHtml, {
+    headers: { 'Content-Type': 'text/html' }
   });
 }
 
