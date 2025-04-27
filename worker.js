@@ -137,7 +137,8 @@ async function handleRequest(request) {
   // 处理管理界面
   if (path === 'admin') {
     // 强制要求验证
-    if (!isAdmin(request)) {
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Basic ')) {
       return new Response('Unauthorized', {
         status: 401,
         headers: {
@@ -145,6 +146,17 @@ async function handleRequest(request) {
         }
       });
     }
+
+    const [username, password] = atob(authHeader.slice(6)).split(':');
+    if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
+      return new Response('Unauthorized', {
+        status: 401,
+        headers: {
+          'WWW-Authenticate': 'Basic realm="Instagram账号管理系统"'
+        }
+      });
+    }
+
     // 替换模板中的变量
     const html = adminHtml.replace(/__ORIGIN__/g, origin);
     return new Response(html, {
@@ -180,7 +192,8 @@ async function handleRequest(request) {
     selectedAccount.lastUsed = new Date().toISOString();
     await updateAccount(selectedAccount);
 
-    return Response.redirect(`https://instagram.com/${selectedAccount.username}`, 302);
+    // 重定向到Instagram应用
+    return createInstagramAppRedirect(selectedAccount.username);
   }
 
   // 处理短代码重定向
@@ -191,7 +204,8 @@ async function handleRequest(request) {
     account.lastUsed = new Date().toISOString();
     await updateAccount(account);
 
-    return Response.redirect(`https://instagram.com/${account.username}`, 302);
+    // 重定向到Instagram应用
+    return createInstagramAppRedirect(account.username);
   }
 
   // 返回 404 页面
@@ -321,38 +335,76 @@ const adminHtml = `
         const baseUrl = location.origin;
         
         accounts.forEach(account => {
+          // 创建行元素
           const tr = document.createElement('tr');
           
-          // 短链接显示
-          let shortLinkHtml = '';
+          // 用户名单元格
+          const tdUsername = document.createElement('td');
+          tdUsername.textContent = account.username;
+          tr.appendChild(tdUsername);
+          
+          // 短链接单元格
+          const tdShortLink = document.createElement('td');
           if (account.shortCode) {
             const shortCodeId = 'shortcode_' + account.shortCode;
             const accountUrl = baseUrl + '/' + account.shortCode;
-            shortLinkHtml = \`
-              <div class="input-group">
-                <input type="text" class="form-control" id="\${shortCodeId}" value="\${accountUrl}" readonly>
-                <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${shortCodeId}')">复制</button>
-              </div>
-            \`;
+            
+            const div = document.createElement('div');
+            div.className = 'input-group';
+            
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'form-control';
+            input.id = shortCodeId;
+            input.value = accountUrl;
+            input.readOnly = true;
+            
+            const button = document.createElement('button');
+            button.className = 'btn btn-outline-secondary';
+            button.textContent = '复制';
+            button.onclick = function() { copyToClipboard(shortCodeId); };
+            
+            div.appendChild(input);
+            div.appendChild(button);
+            tdShortLink.appendChild(div);
           } else {
-            shortLinkHtml = '<span class="text-muted">未设置</span>';
+            const span = document.createElement('span');
+            span.className = 'text-muted';
+            span.textContent = '未设置';
+            tdShortLink.appendChild(span);
           }
+          tr.appendChild(tdShortLink);
           
-          const createdAtText = account.createdAt ? new Date(account.createdAt).toLocaleString() : '未知';
-          const lastUsedText = account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用';
+          // 自定义链接单元格
+          const tdCustomLink = document.createElement('td');
+          tdCustomLink.textContent = account.shortCode || '未设置';
+          tr.appendChild(tdCustomLink);
           
-          tr.innerHTML = \`
-            <td>\${account.username}</td>
-            <td>\${shortLinkHtml}</td>
-            <td>\${account.shortCode || '未设置'}</td>
-            <td>\${account.clicks || 0}</td>
-            <td>\${createdAtText}</td>
-            <td>\${lastUsedText}</td>
-            <td>
-              <button onclick="deleteAccount('\${account.username}')" class="btn btn-sm btn-danger">删除</button>
-            </td>
-          \`;
+          // 点击次数单元格
+          const tdClicks = document.createElement('td');
+          tdClicks.textContent = account.clicks || 0;
+          tr.appendChild(tdClicks);
           
+          // 创建时间单元格
+          const tdCreatedAt = document.createElement('td');
+          tdCreatedAt.textContent = account.createdAt ? new Date(account.createdAt).toLocaleString() : '未知';
+          tr.appendChild(tdCreatedAt);
+          
+          // 最后使用时间单元格
+          const tdLastUsed = document.createElement('td');
+          tdLastUsed.textContent = account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用';
+          tr.appendChild(tdLastUsed);
+          
+          // 操作单元格
+          const tdActions = document.createElement('td');
+          const deleteButton = document.createElement('button');
+          deleteButton.className = 'btn btn-sm btn-danger';
+          deleteButton.textContent = '删除';
+          deleteButton.onclick = function() { deleteAccount(account.username); };
+          tdActions.appendChild(deleteButton);
+          tr.appendChild(tdActions);
+          
+          // 将行添加到表格
           tbody.appendChild(tr);
         });
       } catch (error) {
@@ -509,6 +561,63 @@ async function updateAccount(account) {
   } catch (error) {
     console.error('Error updating account:', error);
   }
+}
+
+// 创建Instagram应用跳转
+function createInstagramAppRedirect(username) {
+  // 创建一个HTML页面，包含自动跳转到Instagram应用的脚本
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>跳转到Instagram</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 20px;
+    }
+    .loading {
+      margin: 20px auto;
+    }
+    .btn {
+      display: inline-block;
+      margin: 10px;
+      padding: 10px 20px;
+      background-color: #0095f6;
+      color: white;
+      text-decoration: none;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>正在跳转到Instagram...</h1>
+  <div class="loading">
+    <img src="https://c.tenor.com/I6kN-6X7nhAAAAAj/loading-buffering.gif" alt="Loading" width="50">
+  </div>
+  <p>如果没有自动跳转，请点击下面的按钮：</p>
+  <a href="instagram://user?username=${username}" class="btn">打开Instagram应用</a>
+  <a href="https://instagram.com/${username}" class="btn">在浏览器中打开</a>
+
+  <script>
+    // 尝试打开Instagram应用
+    window.location.href = "instagram://user?username=${username}";
+    
+    // 如果3秒后仍在此页面，则可能没有安装Instagram应用，自动跳转到网页版
+    setTimeout(function() {
+      window.location.href = "https://instagram.com/${username}";
+    }, 3000);
+  </script>
+</body>
+</html>
+  `;
+  
+  return new Response(html, {
+    headers: { 'Content-Type': 'text/html' }
+  });
 }
 
 // 监听请求事件
