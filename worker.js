@@ -117,6 +117,7 @@ async function handleAPI(request) {
 async function handleRequest(request) {
   const url = new URL(request.url);
   const path = url.pathname.slice(1); // 移除开头的 /
+  const origin = url.origin; // 获取当前请求的origin
 
   // 处理管理界面
   if (path === 'admin') {
@@ -129,7 +130,9 @@ async function handleRequest(request) {
         }
       });
     }
-    return new Response(adminHtml, {
+    // 替换模板中的变量
+    const html = adminHtml.replace('__ORIGIN__', origin);
+    return new Response(html, {
       headers: { 'Content-Type': 'text/html' }
     });
   }
@@ -207,7 +210,7 @@ const adminHtml = `
             <div class="col-md-12">
               <label class="form-label">自定义短代码 (8位)</label>
               <input type="text" class="form-control" id="shortCode" required>
-              <div class="form-text">这将作为访问链接的一部分，例如: https://instagram-redirect.w00.workers.dev/你的短代码</div>
+              <div class="form-text">这将作为访问链接的一部分，例如: __ORIGIN__/你的短代码</div>
             </div>
           </div>
           <button type="submit" class="btn btn-primary mt-3">添加账号</button>
@@ -219,7 +222,7 @@ const adminHtml = `
       <div class="card-body">
         <h5 class="card-title">轮询地址</h5>
         <div class="input-group">
-          <input type="text" class="form-control" id="rotateUrl" value="${window.location.origin}" readonly>
+          <input type="text" class="form-control" id="rotateUrl" value="__ORIGIN__" readonly>
           <button class="btn btn-outline-secondary" onclick="copyToClipboard('rotateUrl')">复制</button>
         </div>
         <small class="text-muted">访问此地址将随机跳转到一个账号</small>
@@ -276,7 +279,8 @@ const adminHtml = `
         const tbody = document.getElementById('accountsList');
         tbody.innerHTML = '';
         
-        const baseUrl = window.location.origin;
+        // 使用当前页面的origin作为基础URL
+        const baseUrl = location.origin;
         
         accounts.forEach(account => {
           const tr = document.createElement('tr');
@@ -394,28 +398,14 @@ const adminHtml = `
     }
 
     // 页面加载完成后加载账号列表
-    loadAccounts();
+    document.addEventListener('DOMContentLoaded', function() {
+      // 加载账号列表
+      loadAccounts();
+    });
   </script>
 </body>
 </html>
 `;
-
-// 处理管理界面
-async function handleAdmin(request) {
-  // 强制要求验证
-  if (!isAdmin(request)) {
-    return new Response('Unauthorized', {
-      status: 401,
-      headers: {
-        'WWW-Authenticate': 'Basic realm="Instagram账号管理系统"'
-      }
-    });
-  }
-
-  return new Response(adminHtml, {
-    headers: { 'Content-Type': 'text/html' }
-  });
-}
 
 // KV 操作函数
 async function listAccounts() {
