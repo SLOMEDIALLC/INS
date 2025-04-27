@@ -120,7 +120,18 @@ async function handleRequest(request) {
 
   // 处理管理界面
   if (path === 'admin') {
-    return handleAdmin(request);
+    // 强制要求验证
+    if (!isAdmin(request)) {
+      return new Response('Unauthorized', {
+        status: 401,
+        headers: {
+          'WWW-Authenticate': 'Basic realm="Instagram账号管理系统"'
+        }
+      });
+    }
+    return new Response(adminHtml, {
+      headers: { 'Content-Type': 'text/html' }
+    });
   }
 
   // 处理 API 请求
@@ -391,7 +402,7 @@ const adminHtml = `
 
 // 处理管理界面
 async function handleAdmin(request) {
-  // 检查是否已经验证
+  // 强制要求验证
   if (!isAdmin(request)) {
     return new Response('Unauthorized', {
       status: 401,
