@@ -68,7 +68,8 @@ async function handleAPI(request) {
         shortCode: shortCode || null, // 如果没有提供短代码，则设为null
         clicks: 0,
         lastUsed: null,
-        hasCustomShortCode: !!shortCode // 标记是否有自定义短代码
+        hasCustomShortCode: !!shortCode, // 标记是否有自定义短代码
+        createdAt: new Date().toISOString() // 添加创建时间
       };
 
       // 保存账号信息
@@ -92,7 +93,9 @@ async function handleAPI(request) {
       const account = await INSTAGRAM_ACCOUNTS.get(username, 'json');
       if (account) {
         await INSTAGRAM_ACCOUNTS.delete(username);
-        await INSTAGRAM_ACCOUNTS.delete(`shortcode:${account.shortCode}`);
+        if (account.shortCode) {
+          await INSTAGRAM_ACCOUNTS.delete(`shortcode:${account.shortCode}`);
+        }
         return new Response('OK');
       }
       return new Response('Account not found', { status: 404 });
@@ -216,11 +219,17 @@ const adminHtml = `
       background-color: #ffc107;
       border-color: #ffc107;
     }
+    .note {
+      color: red;
+      font-size: 12px;
+      margin-top: 5px;
+    }
   </style>
 </head>
 <body>
   <div class="container mt-5">
     <h1 class="mb-4">Instagram 账号管理</h1>
+    <div class="note mb-3">注意: 不管是自定义链接还是轮询链接，都要进行INSTAGRAM APP跳转(因为INSTAGRAM本身 账号在浏览器中打开链接是没有跳转APP的)</div>
     
     <div class="card mb-4">
       <div class="card-body">
@@ -230,10 +239,12 @@ const adminHtml = `
             <div class="col-md-6">
               <label class="form-label">Instagram 用户名</label>
               <input type="text" class="form-control" id="username" required>
+              <div class="note">这里指的是INSTAGRAM账号</div>
             </div>
             <div class="col-md-6">
-              <label class="form-label">自定义短代码 (选填)</label>
+              <label class="form-label">自定义短代码 (8位)</label>
               <input type="text" class="form-control" id="shortCode">
+              <div class="note">这里是域名/后面添加的8个字符</div>
               <div class="form-text">这将作为访问链接的一部分，例如: __ORIGIN__/你的短代码。如不填写则只能通过轮询访问。</div>
             </div>
           </div>
@@ -249,7 +260,8 @@ const adminHtml = `
           <input type="text" class="form-control" id="rotateUrl" value="__ORIGIN__" readonly>
           <button class="btn btn-outline-secondary" onclick="copyToClipboard('rotateUrl')">复制</button>
         </div>
-        <small class="text-muted">访问此地址将随机跳转到一个账号</small>
+        <small class="text-muted">访问此地址将自动轮询所有账号</small>
+        <div class="note">这是只轮询没有设置短链接的账号(按外部请求顺序)</div>
       </div>
     </div>
 
@@ -259,6 +271,7 @@ const adminHtml = `
           <h5 class="card-title mb-0">账号列表</h5>
           <button onclick="resetStats()" class="btn btn-warning">重置统计</button>
         </div>
+        <div class="note mb-3">如果重置统计，将会把所有账号的[点击次数]、[开始使用时间]、[最后使用时间]清0</div>
         <div class="table-responsive">
           <table class="table">
             <thead>
@@ -267,6 +280,7 @@ const adminHtml = `
                 <th>短链接</th>
                 <th>自定义链接</th>
                 <th>点击次数</th>
+                <th>开始使用时间</th>
                 <th>最后使用时间</th>
                 <th>操作</th>
               </tr>
@@ -314,16 +328,17 @@ const adminHtml = `
           if (account.shortCode) {
             const shortCodeId = 'shortcode_' + account.shortCode;
             const accountUrl = baseUrl + '/' + account.shortCode;
-            shortLinkHtml = `
+            shortLinkHtml = \`
               <div class="input-group">
-                <input type="text" class="form-control" id="${shortCodeId}" value="${accountUrl}" readonly>
-                <button class="btn btn-outline-secondary" onclick="copyToClipboard('${shortCodeId}')">复制</button>
+                <input type="text" class="form-control" id="\${shortCodeId}" value="\${accountUrl}" readonly>
+                <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${shortCodeId}')">复制</button>
               </div>
-            `;
+            \`;
           } else {
             shortLinkHtml = '<span class="text-muted">未设置</span>';
           }
           
+          const createdAtText = account.createdAt ? new Date(account.createdAt).toLocaleString() : '未知';
           const lastUsedText = account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用';
           
           tr.innerHTML = \`
@@ -331,6 +346,7 @@ const adminHtml = `
             <td>\${shortLinkHtml}</td>
             <td>\${account.shortCode || '未设置'}</td>
             <td>\${account.clicks || 0}</td>
+            <td>\${createdAtText}</td>
             <td>\${lastUsedText}</td>
             <td>
               <button onclick="deleteAccount('\${account.username}')" class="btn btn-sm btn-danger">删除</button>
@@ -384,7 +400,7 @@ const adminHtml = `
 
     // 删除账号
     async function deleteAccount(username) {
-      if (!confirm('确定要删除这个账号吗？')) return;
+      if (!confirm('确定要删除这个账号吗？删除后将无法恢复！')) return;
       
       try {
         const response = await fetch('/api/accounts/' + username, {
@@ -407,7 +423,7 @@ const adminHtml = `
 
     // 重置统计
     async function resetStats() {
-      if (!confirm('确定要重置所有统计数据吗？')) return;
+      if (!confirm('确定要重置所有统计数据吗？这将清空所有账号的点击次数和使用时间记录。')) return;
       
       try {
         const response = await fetch('/api/stats/reset', {
@@ -442,6 +458,26 @@ const adminHtml = `
 </html>
 `;
 
+// 404 页面 HTML
+const notFoundHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>404 - 页面未找到</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+  <div class="container mt-5 text-center">
+    <h1>404</h1>
+    <p>页面未找到</p>
+    <a href="/" class="btn btn-primary">返回首页</a>
+  </div>
+</body>
+</html>
+`;
+
 // KV 操作函数
 async function listAccounts() {
   try {
@@ -467,7 +503,9 @@ async function listAccounts() {
 async function updateAccount(account) {
   try {
     await INSTAGRAM_ACCOUNTS.put(account.username, JSON.stringify(account));
-    await INSTAGRAM_ACCOUNTS.put(`shortcode:${account.shortCode}`, JSON.stringify(account));
+    if (account.shortCode) {
+      await INSTAGRAM_ACCOUNTS.put(`shortcode:${account.shortCode}`, JSON.stringify(account));
+    }
   } catch (error) {
     console.error('Error updating account:', error);
   }
