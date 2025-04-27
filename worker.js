@@ -3,6 +3,16 @@ const KV_NAMESPACE = 'INSTAGRAM_ACCOUNTS'
 const ADMIN_USERNAME = 'admin' // 在实际部署时更改
 const ADMIN_PASSWORD = 'admin123' // 在实际部署时更改
 
+// 生成8位随机字符串
+function generateShortCode() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < 8; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
 // 处理请求的主函数
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request))
@@ -10,20 +20,37 @@ addEventListener('fetch', event => {
 
 async function handleRequest(request) {
   const url = new URL(request.url)
+  const path = url.pathname.slice(1) // 移除开头的 /
   
   // 处理管理后台路由
-  if (url.pathname === '/admin') {
+  if (path === 'admin') {
     return handleAdmin(request)
   }
   
   // 处理 API 请求
-  if (url.pathname.startsWith('/api/')) {
+  if (path.startsWith('api/')) {
     return handleAPI(request)
   }
   
-  // 处理主页重定向
-  if (url.pathname === '/' || url.pathname === '') {
+  // 处理轮询重定向（根路径）
+  if (path === '') {
     return handleRedirect(request)
+  }
+
+  // 处理特定账号的重定向
+  const account = await INSTAGRAM_ACCOUNTS.get(`shortcode:${path}`, 'json')
+  if (account) {
+    // 更新点击次数
+    account.clicks = (account.clicks || 0) + 1
+    account.lastUsed = Date.now()
+    await updateAccount(account)
+    
+    // 记录访问 IP
+    const clientIP = request.headers.get('CF-Connecting-IP')
+    await logAccess(account.username, clientIP)
+    
+    // 重定向到 Instagram 应用
+    return Response.redirect(`instagram://user?username=${account.username}`, 302)
   }
 
   // 返回 404
@@ -63,6 +90,10 @@ async function handleAdmin(request) {
         <meta charset="utf-8">
         <title>Instagram 账号管理</title>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+          .copy-btn { cursor: pointer; }
+          .copy-btn:hover { opacity: 0.8; }
+        </style>
     </head>
     <body>
         <div class="container mt-5">
@@ -84,12 +115,25 @@ async function handleAdmin(request) {
 
             <div class="card mt-4">
                 <div class="card-body">
+                    <h5 class="card-title">轮询地址</h5>
+                    <div class="input-group mb-3">
+                        <input type="text" class="form-control" id="rotateUrl" readonly>
+                        <button class="btn btn-outline-secondary copy-btn" onclick="copyToClipboard('rotateUrl')">
+                            复制
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mt-4">
+                <div class="card-body">
                     <h5 class="card-title">账号列表</h5>
                     <div class="table-responsive">
                         <table class="table" id="accountsTable">
                             <thead>
                                 <tr>
                                     <th>用户名</th>
+                                    <th>固定链接</th>
                                     <th>点击次数</th>
                                     <th>最后使用时间</th>
                                     <th>操作</th>
@@ -104,6 +148,15 @@ async function handleAdmin(request) {
         </div>
 
         <script>
+            const baseUrl = window.location.origin;
+            document.getElementById('rotateUrl').value = baseUrl;
+
+            function copyToClipboard(elementId) {
+                const element = document.getElementById(elementId);
+                element.select();
+                document.execCommand('copy');
+            }
+
             // 加载账号列表
             async function loadAccounts() {
                 const response = await fetch('/api/accounts', {
@@ -117,8 +170,17 @@ async function handleAdmin(request) {
                 
                 accounts.forEach(account => {
                     const tr = document.createElement('tr');
+                    const shortCodeId = 'shortcode_' + account.shortCode;
                     tr.innerHTML = \`
                         <td>\${account.username}</td>
+                        <td>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="\${shortCodeId}" value="\${baseUrl}/\${account.shortCode}" readonly>
+                                <button class="btn btn-outline-secondary copy-btn" onclick="copyToClipboard('\${shortCodeId}')">
+                                    复制
+                                </button>
+                            </div>
+                        </td>
                         <td>\${account.clicks || 0}</td>
                         <td>\${account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用'}</td>
                         <td>
@@ -127,6 +189,20 @@ async function handleAdmin(request) {
                     \`;
                     tbody.appendChild(tr);
                 });
+            }
+
+            // 删除账号
+            async function deleteAccount(username) {
+                if (!confirm('确定要删除这个账号吗？')) return;
+                
+                await fetch(\`/api/accounts/\${username}\`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
+                    }
+                });
+                
+                loadAccounts();
             }
 
             // 添加账号
@@ -138,7 +214,7 @@ async function handleAdmin(request) {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': 'Basic ' + btoa('${ADMIN_USERNAME}:${ADMIN_PASSWORD}')
+                        'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
                     },
                     body: JSON.stringify({ username })
                 });
@@ -147,20 +223,6 @@ async function handleAdmin(request) {
                 loadAccounts();
             };
 
-            // 删除账号
-            async function deleteAccount(username) {
-                if (!confirm('确定要删除这个账号吗？')) return;
-                
-                await fetch(\`/api/accounts/\${username}\`, {
-                    method: 'DELETE',
-                    headers: {
-                        'Authorization': 'Basic ' + btoa('${ADMIN_USERNAME}:${ADMIN_PASSWORD}')
-                    }
-                });
-                
-                loadAccounts();
-            }
-
             // 重置统计
             async function resetStats() {
                 if (!confirm('确定要重置所有统计数据吗？')) return;
@@ -168,7 +230,7 @@ async function handleAdmin(request) {
                 await fetch('/api/stats/reset', {
                     method: 'POST',
                     headers: {
-                        'Authorization': 'Basic ' + btoa('${ADMIN_USERNAME}:${ADMIN_PASSWORD}')
+                        'Authorization': 'Basic ' + btoa(\`\${ADMIN_USERNAME}:\${ADMIN_PASSWORD}\`)
                     }
                 });
                 
@@ -266,36 +328,51 @@ async function handleRedirect(request) {
 
 // KV 操作函数
 async function listAccounts() {
-  const list = await KV_NAMESPACE.list()
-  const accounts = []
-  for (const key of list.keys) {
-    if (key.name.startsWith('account:')) {
-      const account = await KV_NAMESPACE.get(key.name, 'json')
-      accounts.push(account)
+  try {
+    const list = await INSTAGRAM_ACCOUNTS.list()
+    const accounts = []
+    for (const key of list.keys) {
+      if (key.name.startsWith('account:')) {
+        const account = await INSTAGRAM_ACCOUNTS.get(key.name, 'json')
+        if (account) {
+          accounts.push(account)
+        }
+      }
     }
+    return accounts
+  } catch (error) {
+    console.error('Error listing accounts:', error)
+    return []
   }
-  return accounts
 }
 
 async function addAccount(username) {
+  const shortCode = generateShortCode()
   const account = {
     username,
+    shortCode,
     clicks: 0,
     lastUsed: 0
   }
-  await KV_NAMESPACE.put(`account:${username}`, JSON.stringify(account))
+  await INSTAGRAM_ACCOUNTS.put(`account:${username}`, JSON.stringify(account))
+  await INSTAGRAM_ACCOUNTS.put(`shortcode:${shortCode}`, JSON.stringify(account))
 }
 
 async function updateAccount(account) {
-  await KV_NAMESPACE.put(`account:${account.username}`, JSON.stringify(account))
+  await INSTAGRAM_ACCOUNTS.put(`account:${account.username}`, JSON.stringify(account))
+  await INSTAGRAM_ACCOUNTS.put(`shortcode:${account.shortCode}`, JSON.stringify(account))
 }
 
 async function deleteAccount(username) {
-  await KV_NAMESPACE.delete(`account:${username}`)
+  const account = await INSTAGRAM_ACCOUNTS.get(`account:${username}`, 'json')
+  if (account) {
+    await INSTAGRAM_ACCOUNTS.delete(`shortcode:${account.shortCode}`)
+  }
+  await INSTAGRAM_ACCOUNTS.delete(`account:${username}`)
 }
 
 async function logAccess(username, ip) {
   const now = new Date().toISOString()
   const logKey = `log:${now}`
-  await KV_NAMESPACE.put(logKey, JSON.stringify({ username, ip, timestamp: now }))
+  await INSTAGRAM_ACCOUNTS.put(logKey, JSON.stringify({ username, ip, timestamp: now }))
 }
