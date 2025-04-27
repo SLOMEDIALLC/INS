@@ -42,33 +42,42 @@ async function handleAPI(request) {
     }
     
     if (request.method === 'POST') {
-      const { shortCode } = await request.json();
+      const { username, shortCode } = await request.json();
       
-      // 使用短代码作为用户名
-      const username = shortCode;
-      
-      // 验证短代码格式
-      if (!shortCode || typeof shortCode !== 'string') {
-        return new Response('Short code is required', { status: 400 });
+      // 验证用户名格式
+      if (!username || typeof username !== 'string') {
+        return new Response('Instagram用户名是必填项', { status: 400 });
       }
 
-      // 检查短代码是否已存在
-      const existingShortCode = await INSTAGRAM_ACCOUNTS.get(`shortcode:${shortCode}`, 'json');
-      if (existingShortCode) {
-        return new Response('Short code already exists', { status: 400 });
+      // 如果提供了短代码，则验证格式
+      if (shortCode && typeof shortCode !== 'string') {
+        return new Response('短代码格式不正确', { status: 400 });
+      }
+      
+      // 如果提供了短代码，检查是否已存在
+      if (shortCode) {
+        const existingShortCode = await INSTAGRAM_ACCOUNTS.get(`shortcode:${shortCode}`, 'json');
+        if (existingShortCode) {
+          return new Response('短代码已存在', { status: 400 });
+        }
       }
 
       // 创建新账号
       const account = {
-        username: shortCode,
-        shortCode,
+        username,
+        shortCode: shortCode || null, // 如果没有提供短代码，则设为null
         clicks: 0,
-        lastUsed: null
+        lastUsed: null,
+        hasCustomShortCode: !!shortCode // 标记是否有自定义短代码
       };
 
       // 保存账号信息
-      await INSTAGRAM_ACCOUNTS.put(shortCode, JSON.stringify(account));
-      await INSTAGRAM_ACCOUNTS.put(`shortcode:${shortCode}`, JSON.stringify(account));
+      await INSTAGRAM_ACCOUNTS.put(username, JSON.stringify(account));
+      
+      // 如果有短代码，也保存短代码映射
+      if (shortCode) {
+        await INSTAGRAM_ACCOUNTS.put(`shortcode:${shortCode}`, JSON.stringify(account));
+      }
 
       return new Response(JSON.stringify(account), {
         headers: { 'Content-Type': 'application/json' }
@@ -113,6 +122,9 @@ async function handleAPI(request) {
   return new Response('Not Found', { status: 404 });
 }
 
+// 全局变量，用于记录上次轮询的账号索引
+let lastRotationIndex = -1;
+
 // 处理请求的主函数
 async function handleRequest(request) {
   const url = new URL(request.url);
@@ -131,7 +143,7 @@ async function handleRequest(request) {
       });
     }
     // 替换模板中的变量
-    const html = adminHtml.replace('__ORIGIN__', origin);
+    const html = adminHtml.replace(/__ORIGIN__/g, origin);
     return new Response(html, {
       headers: { 'Content-Type': 'text/html' }
     });
@@ -142,22 +154,30 @@ async function handleRequest(request) {
     return handleAPI(request);
   }
 
-  // 如果路径为空，随机选择一个账号进行重定向
+  // 如果路径为空，按顺序轮询没有设置短链接的账号
   if (path === '') {
     const accounts = await listAccounts();
     if (accounts.length === 0) {
       return new Response('No accounts available', { status: 404 });
     }
 
-    // 随机选择一个账号
-    const randomAccount = accounts[Math.floor(Math.random() * accounts.length)];
+    // 筛选没有自定义短代码的账号用于轮询
+    const rotationAccounts = accounts.filter(account => !account.hasCustomShortCode);
+    
+    if (rotationAccounts.length === 0) {
+      return new Response('No accounts available for rotation', { status: 404 });
+    }
+    
+    // 按顺序选择下一个账号
+    lastRotationIndex = (lastRotationIndex + 1) % rotationAccounts.length;
+    const selectedAccount = rotationAccounts[lastRotationIndex];
     
     // 更新点击次数和最后使用时间
-    randomAccount.clicks++;
-    randomAccount.lastUsed = new Date().toISOString();
-    await updateAccount(randomAccount);
+    selectedAccount.clicks++;
+    selectedAccount.lastUsed = new Date().toISOString();
+    await updateAccount(selectedAccount);
 
-    return Response.redirect(`https://instagram.com/${randomAccount.username}`, 302);
+    return Response.redirect(`https://instagram.com/${selectedAccount.username}`, 302);
   }
 
   // 处理短代码重定向
@@ -207,10 +227,14 @@ const adminHtml = `
         <h5 class="card-title">添加新账号</h5>
         <form id="addForm">
           <div class="row g-3">
-            <div class="col-md-12">
-              <label class="form-label">自定义短代码 (8位)</label>
-              <input type="text" class="form-control" id="shortCode" required>
-              <div class="form-text">这将作为访问链接的一部分，例如: __ORIGIN__/你的短代码</div>
+            <div class="col-md-6">
+              <label class="form-label">Instagram 用户名</label>
+              <input type="text" class="form-control" id="username" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">自定义短代码 (选填)</label>
+              <input type="text" class="form-control" id="shortCode">
+              <div class="form-text">这将作为访问链接的一部分，例如: __ORIGIN__/你的短代码。如不填写则只能通过轮询访问。</div>
             </div>
           </div>
           <button type="submit" class="btn btn-primary mt-3">添加账号</button>
@@ -284,20 +308,28 @@ const adminHtml = `
         
         accounts.forEach(account => {
           const tr = document.createElement('tr');
-          const shortCodeId = 'shortcode_' + account.shortCode;
           
-          const accountUrl = baseUrl + '/' + account.shortCode;
+          // 短链接显示
+          let shortLinkHtml = '';
+          if (account.shortCode) {
+            const shortCodeId = 'shortcode_' + account.shortCode;
+            const accountUrl = baseUrl + '/' + account.shortCode;
+            shortLinkHtml = `
+              <div class="input-group">
+                <input type="text" class="form-control" id="${shortCodeId}" value="${accountUrl}" readonly>
+                <button class="btn btn-outline-secondary" onclick="copyToClipboard('${shortCodeId}')">复制</button>
+              </div>
+            `;
+          } else {
+            shortLinkHtml = '<span class="text-muted">未设置</span>';
+          }
+          
           const lastUsedText = account.lastUsed ? new Date(account.lastUsed).toLocaleString() : '从未使用';
           
           tr.innerHTML = \`
             <td>\${account.username}</td>
-            <td>
-              <div class="input-group">
-                <input type="text" class="form-control" id="\${shortCodeId}" value="\${accountUrl}" readonly>
-                <button class="btn btn-outline-secondary" onclick="copyToClipboard('\${shortCodeId}')">复制</button>
-              </div>
-            </td>
-            <td>\${account.shortCode}</td>
+            <td>\${shortLinkHtml}</td>
+            <td>\${account.shortCode || '未设置'}</td>
             <td>\${account.clicks || 0}</td>
             <td>\${lastUsedText}</td>
             <td>
@@ -317,7 +349,8 @@ const adminHtml = `
     document.getElementById('addForm').onsubmit = async (e) => {
       e.preventDefault();
       
-      const shortCode = document.getElementById('shortCode').value;
+      const username = document.getElementById('username').value;
+      const shortCode = document.getElementById('shortCode').value || null; // 如果为空，则传null
       
       try {
         const response = await fetch('/api/accounts', {
@@ -327,6 +360,7 @@ const adminHtml = `
             'Authorization': 'Basic ' + btoa('admin:admin123')
           },
           body: JSON.stringify({
+            username,
             shortCode
           })
         });
@@ -338,6 +372,7 @@ const adminHtml = `
         }
 
         // 清空输入框
+        document.getElementById('username').value = '';
         document.getElementById('shortCode').value = '';
         
         // 重新加载账号列表
