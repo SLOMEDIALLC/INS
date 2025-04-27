@@ -1,5 +1,4 @@
 // KV 命名空间绑定名称
-const KV_NAMESPACE = 'INSTAGRAM_ACCOUNTS'
 const ADMIN_USERNAME = 'admin' // 在实际部署时更改
 const ADMIN_PASSWORD = 'admin123' // 在实际部署时更改
 
@@ -31,7 +30,7 @@ async function handleAPI(request) {
 
   // 验证管理员身份
   if (!isAdmin(request)) {
-    return new Response('Unauthorized', { status: 401 });
+    return new Response('Unauthorized', { status: 401, headers: { 'Content-Type': 'application/json' } });
   }
 
   if (path === 'accounts') {
@@ -43,22 +42,14 @@ async function handleAPI(request) {
     }
     
     if (request.method === 'POST') {
-      const { username, shortCode } = await request.json();
+      const { shortCode } = await request.json();
       
-      // 验证用户名格式
-      if (!username || typeof username !== 'string') {
-        return new Response('Invalid username', { status: 400 });
-      }
-
+      // 使用短代码作为用户名
+      const username = shortCode;
+      
       // 验证短代码格式
       if (!shortCode || typeof shortCode !== 'string') {
         return new Response('Short code is required', { status: 400 });
-      }
-
-      // 检查用户名是否已存在
-      const existingAccount = await INSTAGRAM_ACCOUNTS.get(username, 'json');
-      if (existingAccount) {
-        return new Response('Username already exists', { status: 400 });
       }
 
       // 检查短代码是否已存在
@@ -69,14 +60,14 @@ async function handleAPI(request) {
 
       // 创建新账号
       const account = {
-        username,
+        username: shortCode,
         shortCode,
         clicks: 0,
         lastUsed: null
       };
 
       // 保存账号信息
-      await INSTAGRAM_ACCOUNTS.put(username, JSON.stringify(account));
+      await INSTAGRAM_ACCOUNTS.put(shortCode, JSON.stringify(account));
       await INSTAGRAM_ACCOUNTS.put(`shortcode:${shortCode}`, JSON.stringify(account));
 
       return new Response(JSON.stringify(account), {
@@ -100,13 +91,23 @@ async function handleAPI(request) {
   }
 
   if (path === 'stats/reset' && request.method === 'POST') {
-    const accounts = await listAccounts();
-    for (const account of accounts) {
-      account.clicks = 0;
-      account.lastUsed = null;
-      await updateAccount(account);
+    try {
+      const accounts = await listAccounts();
+      for (const account of accounts) {
+        account.clicks = 0;
+        account.lastUsed = null;
+        await updateAccount(account);
+      }
+      return new Response(JSON.stringify({success: true}), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (error) {
+      console.error('Error resetting stats:', error);
+      return new Response(JSON.stringify({error: error.message}), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
-    return new Response('OK');
   }
 
   return new Response('Not Found', { status: 404 });
@@ -182,12 +183,8 @@ const adminHtml = `
         <h5 class="card-title">添加新账号</h5>
         <form id="addForm">
           <div class="row g-3">
-            <div class="col-md-6">
-              <label class="form-label">Instagram 用户名</label>
-              <input type="text" class="form-control" id="username" required>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">自定义短代码</label>
+            <div class="col-md-12">
+              <label class="form-label">自定义短代码 (8位)</label>
               <input type="text" class="form-control" id="shortCode" required>
               <div class="form-text">这将作为访问链接的一部分，例如: https://instagram-redirect.w00.workers.dev/你的短代码</div>
             </div>
@@ -245,7 +242,7 @@ const adminHtml = `
       try {
         const response = await fetch('/api/accounts', {
           headers: {
-            'Authorization': 'Basic ' + btoa('admin:password123')
+            'Authorization': 'Basic ' + btoa('admin:admin123')
           }
         });
         
@@ -293,7 +290,6 @@ const adminHtml = `
     document.getElementById('addForm').onsubmit = async (e) => {
       e.preventDefault();
       
-      const username = document.getElementById('username').value;
       const shortCode = document.getElementById('shortCode').value;
       
       try {
@@ -301,10 +297,9 @@ const adminHtml = `
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': 'Basic ' + btoa('admin:password123')
+            'Authorization': 'Basic ' + btoa('admin:admin123')
           },
           body: JSON.stringify({
-            username,
             shortCode
           })
         });
@@ -316,7 +311,6 @@ const adminHtml = `
         }
 
         // 清空输入框
-        document.getElementById('username').value = '';
         document.getElementById('shortCode').value = '';
         
         // 重新加载账号列表
@@ -334,7 +328,7 @@ const adminHtml = `
         const response = await fetch('/api/accounts/' + username, {
           method: 'DELETE',
           headers: {
-            'Authorization': 'Basic ' + btoa('admin:password123')
+            'Authorization': 'Basic ' + btoa('admin:admin123')
           }
         });
 
@@ -357,17 +351,21 @@ const adminHtml = `
         const response = await fetch('/api/stats/reset', {
           method: 'POST',
           headers: {
-            'Authorization': 'Basic ' + btoa('admin:password123')
+            'Authorization': 'Basic ' + btoa('admin:admin123')
           }
         });
 
         if (!response.ok) {
-          alert('重置失败');
+          const errorText = await response.text();
+          console.error('重置失败:', errorText);
+          alert('重置失败: ' + errorText);
           return;
         }
 
+        alert('重置统计成功！');
         loadAccounts();
       } catch (error) {
+        console.error('重置失败:', error);
         alert('重置失败: ' + error.message);
       }
     }
@@ -398,9 +396,11 @@ async function handleAdmin(request) {
 // KV 操作函数
 async function listAccounts() {
   try {
-    const list = await INSTAGRAM_ACCOUNTS.list({ prefix: '' });
+    const list = await INSTAGRAM_ACCOUNTS.list();
     const accounts = [];
+    
     for (const key of list.keys) {
+      // 只处理非shortcode:前缀的键
       if (!key.name.startsWith('shortcode:')) {
         const account = await INSTAGRAM_ACCOUNTS.get(key.name, 'json');
         if (account) {
@@ -426,5 +426,12 @@ async function updateAccount(account) {
 
 // 监听请求事件
 addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request));
+  try {
+    event.respondWith(handleRequest(event.request));
+  } catch (e) {
+    event.respondWith(new Response('Error: ' + e.message, { 
+      status: 500,
+      headers: { 'Content-Type': 'text/plain' }
+    }));
+  }
 });
