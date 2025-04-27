@@ -1,0 +1,7 @@
+name = "instagram-redirect"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+kv_namespaces = [
+  { binding = "INSTAGRAM_ACCOUNTS", id = "YOUR_KV_NAMESPACE_ID" }
+]
